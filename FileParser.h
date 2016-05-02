@@ -8,15 +8,7 @@
 #include <cstring>
 #include <map>
 
-typedef std::map<std::string,std::map<std::string,std::string>> KVMap;
-typedef std::map<std::string,std::map<std::string,std::string>>::const_iterator KVMapConstIterator;
-typedef std::map<std::string,std::map<std::string,std::string>>::iterator KVMapIterator;
-typedef std::map<std::string,std::string> ValueMap;
-typedef std::map<std::string,std::string>::iterator ValueMapIterator;
-typedef std::map<std::string,std::string>::const_iterator ValueMapConstIterator;
-typedef std::vector<std::string> HeaderList;
-typedef std::vector<std::string>::const_iterator HeaderListConstIterator;
-typedef std::vector<std::string>::iterator HeaderListIterator;
+#include "TypeDefs.h"
 
 class FileParser { 
 	public:
