@@ -62,7 +62,15 @@ typedef std::vector<u_char> flag_set;
 		u_short th_win;		/* window */
 		u_short th_sum;		/* checksum */
 		u_short th_urp;		/* urgent pointer */
-};
+	};
+	
+	struct sniff_udp {
+		u_short uh_sport;
+		u_short uh_dport;
+		u_short uh_length;
+		u_short uh_checksum;
+	};
+
 	struct tcp_options {
 		u_char opcode;
 #define OPT_NOOP 0x01

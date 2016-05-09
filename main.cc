@@ -13,18 +13,30 @@
 //TODO: Fix bug in explode numerics that causes the last number in a port sequence to not be saved properly
 //TODO: SOmeday support multiple services?
 
+//TODO: enable emailing of ports knocked
+//TODO: enable hitting utils.slowip.net whenever a port knock is successful
+
 // GLOBALS
 pcap_t * pcap_handle;		/* Session handle */
 std::string dev;
 std::string local_host;
+bool use_udp = false;
+bool use_tcp = false;
+bool exitProgram = false;
 
 typedef std::vector<Service*> ServiceList;
 typedef std::vector<Service*>::const_iterator ServiceListConstIterator;
 typedef std::vector<Service*>::iterator ServiceListIterator;
+typedef struct _command { std::string start; std::string end; std::string ip_address; time_t timeout; } RegisteredCommand;
+typedef std::vector<RegisteredCommand> RegisteredCommandList;
 
 ServiceList services;
+RegisteredCommandList registeredCommands;
 
 void trimNumeric(std::string &in);
+void trimString(std::string &);
+bool headerTypeRequired(int,const char*);
+bool hasElement(std::vector<const char*>,const char*);
 
 bool getService(ServiceListIterator & sit,short port){
 	//std::cout << "getService\n";
@@ -39,6 +51,62 @@ bool getService(ServiceListIterator & sit,short port){
 	}
 	return false;
 }
+bool hasElement(std::vector<const char*>v,const char* entry){
+	return (std::find(v.begin(),v.end(),entry) != v.end());
+}
+
+bool headerTypeRequired(int headerType,const char* entry){
+	std::vector<const char*> cleanup = { "sequence","timeout","type" };
+	std::vector<const char*> commandTrigger = {
+		"sequence","timeout","port","command_start","command_timeout","command_end","type"
+	};
+	if(headerType == Service::header_type_cleanup){
+		return hasElement(cleanup,entry);
+	}
+	if(headerType == Service::header_type_command_trigger){
+		return hasElement(commandTrigger,entry);
+	}
+	return false;
+}
+
+void interpolateCommand(std::string &str,std::string ip){
+	//LOL fix this
+	char buffer[str.length() + ip.length()];
+	sprintf(buffer,str.c_str(),ip.c_str());
+	str = buffer;
+}
+
+void registerCommand(std::string start,std::string end,std::string ipAddress,time_t commandTimeout){
+	RegisteredCommand m;
+	m.start = start;
+	m.end = end;
+	m.ip_address = ipAddress;
+	m.timeout = commandTimeout;
+	//TODO: sanitize
+	interpolateCommand(m.start,ipAddress);
+	interpolateCommand(m.end,ipAddress);
+	registeredCommands.push_back(m);
+	int ret = system(m.start.c_str());
+	std::cout << "Ran: " << m.start << "\n";
+	std::cout << "return value: " << ret << "\n";
+}
+
+void processCommands(){
+	RegisteredCommandList::iterator it = registeredCommands.begin();
+	RegisteredCommandList::iterator end_it = registeredCommands.end();
+	if(it == end_it) return; 
+	RegisteredCommandList r;
+	for(; it != registeredCommands.end();++it){
+		if((*it).timeout <= time(NULL)){
+			int ret = system((*it).end.c_str());
+			std::cout << "[" << ret << "]: " << it->end << "\n";
+		}else{
+			r.push_back((*it));
+		}
+	}
+	registeredCommands = std::move(r);
+
+}
 
 
 void packet_capture(u_char* args,const struct pcap_pkthdr *header,const u_char* packet){
@@ -46,6 +114,7 @@ void packet_capture(u_char* args,const struct pcap_pkthdr *header,const u_char* 
     //struct snsff_ethernet * ptr_eth;
     struct sniff_ip * ptr_ip;
     struct sniff_tcp * ptr_tcp;
+	struct sniff_udp * ptr_udp;
     //u_short src_port,dst_port;
     std::string src_ip,dst_ip;
     //u_char* payload;
@@ -59,27 +128,42 @@ void packet_capture(u_char* args,const struct pcap_pkthdr *header,const u_char* 
 		//std::cerr << "Invalid IP header length\n";
         return;
     }
-    ptr_tcp = (struct sniff_tcp*)(packet + sizeof(struct sniff_ethernet)+ size_ip);
-    size_tcp = TH_OFF(ptr_tcp)*4;
-    if (size_tcp < 20) {
-		//std::cerr << "Invalid TCP header length\n";
-        return;
-    }
-
+	unsigned short port = ntohs(ptr_tcp->th_dport);
+	if(use_tcp){
+		ptr_tcp = (struct sniff_tcp*)(packet + sizeof(struct sniff_ethernet)+ size_ip);
+		size_tcp = TH_OFF(ptr_tcp)*4;
+		if (size_tcp < 20) {
+			//std::cerr << "Invalid TCP header length\n";
+			return;
+		}
+		port = ntohs(ptr_tcp->th_dport);
+	}else{
+		ptr_udp = (struct sniff_udp*)(packet + sizeof(struct sniff_ethernet)+ size_ip);
+		port = ntohs(ptr_udp->uh_dport);
+	}
 	ServiceListIterator sit;
 
     src_ip = inet_ntoa(ptr_ip->ip_src);
-	if(src_ip != "10.0.0.21"){ return; }
     dst_ip = inet_ntoa(ptr_ip->ip_dst);
 	if(dst_ip == local_host){
-		unsigned short port = ntohs(ptr_tcp->th_dport);
-		std::cout << "Port: " << port << "\n";
 		sit = services.begin();
 		for(;sit != services.end();++sit){
 			int response = (*sit)->knock(src_ip,port);
 			if(response == Service::sequence_success){
-				std::cout << "[yay] Sequence success. Opening port\n";
+				std::cout << "[yay] Sequence success. Opening port for " << src_ip << "\n";
+				if((*sit)->getType() == Service::header_type_command_trigger){
+				time_t timeout;
+				std::string start,end;
+				(*sit)->getOpenCommand(start);
+				(*sit)->getCloseCommand(end);
+				timeout = (*sit)->getCommandTimeout() + time(NULL);
+				registerCommand(start,end,src_ip,timeout);
 				(*sit)->invalidateSequence(src_ip);
+				}else if((*sit)->getType() == Service::header_type_cleanup){
+					std::cout << "[goodbye]\n";
+					exitProgram = true;
+					return;
+				}
 			}else if(response == Service::sequence_next){
 				std::cout << ".";
 			}else if(response == Service::time_exceeded){
@@ -149,9 +233,30 @@ void trimNumeric(std::string &in){
 	return;
 }
 
+void trimString(std::string &in){
+	size_t pos = in.find_first_not_of("\t\n ",0);
+	std::string whitespace = "\t\n ";
+	if(pos == std::string::npos){
+		return;
+	}
+	size_t endPos = in.find_first_of(whitespace,pos);
+	if(endPos == std::string::npos){
+		in = in.substr(pos);
+		return;
+	}
+	in = in.substr(pos,endPos-1);
+	return;
+}
+
 int usage(){
-	//TODO: add option for listing active tcp connections
-	std::cerr << "usage: knockd -i <device> -c <config_file>\n";
+	std::cerr << "usage: knockd -i <device> -I local_ip [-t|-u] [-c <config_file>]\n";
+	std::cerr << "\nOptions:\n";
+	std::cerr << "-i <dev>\t\t Device to listen on\n";
+	std::cerr << "-I <ip>\t\t Ip address of dev\n";
+	std::cerr << "-t\t\t Use TCP\n";
+	std::cerr << "-u\t\t Use UDP\n";
+	std::cerr << "-c <conf>\t\t Use conf as config file\n";
+	std::cerr << "\n";
 	return 0;
 }
 
@@ -162,15 +267,30 @@ int main(int argc, char *argv[]){
 	bpf_u_int32 net;		/* The IP of our sniffing device */
 	std::string filter_exp = "tcp";
 	std::string config_file = "knockd.conf";
-
 	int c = -1;
 	int ret;
 	struct pcap_pkthdr pkt_hdr;
 
-	while ((c = getopt (argc, argv, "i:c:I:")) != -1){
+	while ((c = getopt (argc, argv, "i:c:I:ut")) != -1){
 		switch(c){
 			case 'i':
 				dev = optarg;
+				break;
+			case 'u':
+				if(use_tcp){
+					std::cerr << "Cannot use options 'u' and 't' at the same time\n";
+					return 1;
+				}
+				use_udp = true;
+				use_tcp = false;
+				break;
+			case 't':
+				if(use_udp){
+					std::cerr << "Cannot use options 'u' and 't' at the same time\n";
+					return 1;
+				}
+				use_tcp = true;
+				use_udp = false;
 				break;
 			case 'c':
 				config_file = optarg;
@@ -187,6 +307,11 @@ int main(int argc, char *argv[]){
 				return 2;
 				break;
 		}
+	}
+
+	if(!use_udp && !use_tcp){
+		std::cerr << "Use -u or -t to specify UDP or TCP respectively\n";
+		return 1;
 	}
 
 	if(local_host.length() == 0){
@@ -216,40 +341,106 @@ int main(int argc, char *argv[]){
 			return 3;
 		}else{
 			time_t time = 0;
+			time_t commandTimeout = 0;
+			int hType = Service::header_type_command_trigger;
 			std::string timeout;
-			if(!extractValueMap(vmap,"port",targetPort)){
-				std::cerr << "Header " << *header_list_it << " has no 'port' variable set\n";
-				return 4;
-			}
-			if(!extractValueMap(vmap,"sequence",portList)){
-				std::cerr << "Header " << *header_list_it << " has no 'sequence' variable set\n";
-				return 5;
-			}
-			if(!extractValueMap(vmap,"timeout",timeout)){
-				std::cerr << "Header " << *header_list_it << " has no 'timeout' variable set\n";
-				return 7;
+			std::string strCommandTimeout;
+			std::string commandStart;
+			std::string commandEnd;
+			std::string headerType;
+			Service* serv = new Service();
+
+			if(!extractValueMap(vmap,"type",headerType)){
+				std::cout << "Header " << *header_list_it << " type is defaulting to 'command-trigger'\n";
+				hType = Service::header_type_command_trigger;
 			}else{
-				try{
-					time = std::stoi(timeout);
-				}catch(const std::invalid_argument ia){
-					std::cerr << "Timeout is invalid\n";
-					return 8;
+				trimString(headerType);
+				if(headerType == "cleanup"){
+					std::cout << "Header cleanup detected\n";
+					hType = Service::header_type_cleanup;
+				}else if(headerType == "command-trigger"){
+					std::cout << "Header command-trigger detected\n";
+					hType = Service::header_type_command_trigger;
+				}else{
+					std::cerr << "Invalid header type '" << headerType << "'\n";
+					return 4;
+				}
+			}
+			serv->setType(hType);
+			
+			if(headerTypeRequired(hType,"port")){
+				if(!extractValueMap(vmap,"port",targetPort)){
+					std::cerr << "Header " << *header_list_it << " has no 'port' variable set\n";
+					return 4;
+				}else{
+					//TODO: catch this
+					serv->setTargetPort(std::stoi(targetPort));
 				}
 			}
 
-			std::vector<unsigned short> shortPortList;
-			if(explodeNumericCsv<unsigned short>(portList,shortPortList) < 0){
-				std::cerr << "Error parsing csv\n";
-				return 6;
+			if(headerTypeRequired(hType,"sequence")){
+				if(!extractValueMap(vmap,"sequence",portList) && headerTypeRequired(hType,"sequence")){
+					std::cerr << "Header " << *header_list_it << " has no 'sequence' variable set\n";
+					return 5;
+				}else{
+					std::vector<unsigned short> shortPortList;
+					if(explodeNumericCsv<unsigned short>(portList,shortPortList) < 0){
+						std::cerr << "Error parsing csv\n";
+						return 6;
+					}
+					serv->setPortSequence(shortPortList);
+				}
 			}
-			try{
-				Service* serv = new Service(shortPortList,std::stoi(targetPort));
-				serv->setTimeInterval(time);
-				services.push_back(serv);
-			}catch(const std::invalid_argument ia){
-				std::cerr << "Port must be a valid number\n";
-				return 6;
+
+			if(headerTypeRequired(hType,"command_start")){
+				if(!extractValueMap(vmap,"command_start",commandStart) && headerTypeRequired(hType,"command_start")){
+					std::cerr << "Header " << *header_list_it << " has no 'command_start' variable set\n";
+					return 5;
+				}else{
+					serv->setOpenCommand(commandStart);
+				}
 			}
+
+			if(headerTypeRequired(hType,"command_end")){
+				if(!extractValueMap(vmap,"command_end",commandEnd) && headerTypeRequired(hType,"command_end")){
+					std::cerr << "Header " << *header_list_it << " has no 'command_end' variable set\n";
+					return 5;
+				}else{
+					serv->setCloseCommand(commandEnd);
+				}
+			}
+
+			if(headerTypeRequired(hType,"timeout")){
+				if(!extractValueMap(vmap,"timeout",timeout) && headerTypeRequired(hType,"timeout")){
+					std::cerr << "Header " << *header_list_it << " has no 'timeout' variable set\n";
+					return 7;
+				}else{
+					try{
+						time = std::stoi(timeout);
+					}catch(const std::invalid_argument ia){
+						std::cerr << "Timeout is invalid\n";
+						return 8;
+					}
+					serv->setTimeInterval(time);
+				}
+			}
+
+			if(headerTypeRequired(hType,"command_timeout")){
+				if(!extractValueMap(vmap,"command_timeout",strCommandTimeout) && headerTypeRequired(hType,"command_timeout")){
+					std::cerr << "Header " << *header_list_it << " has no 'command_timeout' variable set\n";
+					return 7;
+				}else{
+					try{
+						commandTimeout = std::stoi(strCommandTimeout);
+					}catch(const std::invalid_argument ia){
+						std::cerr << "Command timeout is invalid\n";
+						return 8;
+					}
+					serv->setCommandTimeout(commandTimeout);
+				}
+			}
+			serv->setType(hType);
+			services.push_back(serv);
 		}
 	}
 
@@ -268,6 +459,9 @@ int main(int argc, char *argv[]){
 		std::cerr << "Couldn't open device: "  << dev.c_str() << ": " << errbuf << "\n";
 	 	return 4;
 	}
+	if(use_udp){
+		filter_exp = "udp";
+	}
 	if (pcap_compile(pcap_handle, &fp, filter_exp.c_str(), 0, net) == -1) {
 		std::cerr << "Couldn't parse filter " << filter_exp.c_str() << ": " << 
 			pcap_geterr(pcap_handle) << "\n";
@@ -285,7 +479,8 @@ int main(int argc, char *argv[]){
 		std::cerr << "[warning] unable to set immediate mode\n";
 	}
 	/* Grab a packet */
-	while(1){
+	while(!exitProgram){
+		processCommands();
 		const u_char* packet = pcap_next(pcap_handle,&pkt_hdr);
 		if(packet)
 				packet_capture(nullptr,&pkt_hdr,packet);

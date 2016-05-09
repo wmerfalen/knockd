@@ -27,17 +27,32 @@ class Service {
 		const static KnockStatus ip_not_found = 5;
 		const static KnockStatus sequence_success = 0;
 		const static KnockStatus general_fuckery_ensued = 0xdeadb33f;
+		const static int header_type_command_trigger = 0;
+		const static int header_type_cleanup = 1;
 		Service(const std::vector<unsigned short>,const unsigned short);
 		Service();
 		~Service();
 		void setTargetPort(const unsigned short p){ m_target_port = p; }
 		short getTargetPort(){ return m_target_port; }
 		void setTimeInterval(time_t);
+		void setPortSequence(std::vector<unsigned short>);
 		time_t getTimeInterval();
 		void invalidateSequence(const std::string);
 		KnockStatus knock(const std::string,unsigned short);
+		int setOpenCommand(const std::string);
+		int setCloseCommand(const std::string);
+		void getOpenCommand(std::string&);
+		void getCloseCommand(std::string&);
+		void setCommandTimeout(time_t);
+		time_t getCommandTimeout(){ return m_command_timeout; }
+		void setType(const int a){ m_header_type = a; }
+		int getType(){ return m_header_type; }
 	private:
+		std::string m_open_command;
+		std::string m_close_command;
+		time_t m_command_timeout;
 		int m_openPort(const std::string);
+		int m_header_type;
 		bool m_isValidPort(const unsigned short);
 		bool m_isNextSequence(const unsigned short,std::string);
 		int m_sequenceComplete(const std::string);

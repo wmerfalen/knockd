@@ -17,12 +17,38 @@ Service::~Service(){
 	
 }
 
+void Service::setPortSequence(std::vector<unsigned short> portList){
+	m_ports = portList;
+}
+
 time_t Service::getTimeInterval(){
 	return m_time_interval_seconds;
 }
 
 void Service::setTimeInterval(time_t t){
 	m_time_interval_seconds = t;
+}
+
+int Service::setOpenCommand(const std::string s){
+	m_open_command = s;
+	return 0;
+}
+
+void Service::getOpenCommand(std::string &s){
+	s = m_open_command;
+}
+
+int Service::setCloseCommand(const std::string s){
+	m_close_command = s;
+	return 0;
+}
+
+void Service::getCloseCommand(std::string& s){
+	s = m_close_command;
+}
+
+void Service::setCommandTimeout(time_t t){
+	m_command_timeout = t;
 }
 
 void Service::m_dumpData(){
@@ -65,18 +91,13 @@ bool Service::m_isNextSequence(const unsigned short port,std::string ip){
 	m_dumpData();
 	IPTimeList::iterator it = m_port_times.find(ip);
 	if(it == m_port_times.end()){
-		std::cout << "Couldn't find key: " << ip << "\n";
 		return false;
 	}
 
 	PortList::const_iterator portListIt = m_ports.begin();
 	PortTimeList::iterator timesIt = it->second.begin();
 	for(;timesIt != it->second.end();++timesIt,++portListIt){
-		if((*portListIt) == (*timesIt).port){
-			std::cout << "Port sequence validated: " << (*timesIt).port << "\n";
-		}else{
-			std::cout << (*portListIt) << " doesnt equal: " << (*timesIt).port << "\n";
-			std::cout << "Invalid port sequence detected: " << (*timesIt).port << "\n";
+		if((*portListIt) != (*timesIt).port){
 			return false;
 		}
 	}
@@ -88,8 +109,6 @@ bool Service::m_isNextSequence(const unsigned short port,std::string ip){
 
 KnockStatus Service::knock(const std::string ip,unsigned short port){
 	if(!m_isValidPort(port)){
-		std::cout << ip << " Invalid port: " << port << "\n";
-		//m_invalidateSequence(ip);
 		return Service::invalid_port;
 	}
 
@@ -105,18 +124,14 @@ KnockStatus Service::knock(const std::string ip,unsigned short port){
 	pt.time = timeReturn;
 	PortTimeList ptl{pt};
 	if(it != m_port_times.end()){
-		std::cout << "Found entry for IP: " << ip << "\n";
 		if(m_isNextSequence(port,ip)){
 			(*it).second.push_back(pt);
-			std::cout << "Added port: " << pt.port << "\n";
 		}
 	}else if((*portListIt) == port){
 		//This is the first entry and needs to be added to the m_port_times structure
 		//TODO: fill pt.time
 		m_port_times.insert(std::pair<std::string,PortTimeList>(ip,ptl));
-		std::cout << "Added first entry for ip: " << ip << "\n";
 	}else{
-		std::cout << "Didn't find entry for ip : " << ip << "\n";
 		m_dumpData();
 	}
 
@@ -146,25 +161,18 @@ KnockStatus Service::knock(const std::string ip,unsigned short port){
 int Service::m_sequenceComplete(const std::string ip){
 	IPTimeList::iterator it = m_port_times.find(ip);
 	if(it == m_port_times.end()){
-		std::cout << "Couldn't find key: " << ip << "\n";
 		return -1;
 	}
 	PortList::const_iterator portListIt = m_ports.begin();
 	PortTimeList::iterator timesIt = it->second.begin();
 	PortTimeList::iterator previousIt = it->second.begin();
 	for(;timesIt != it->second.end();++timesIt,++portListIt){
-		std::cout << "[" << (*portListIt) << ": " << (*timesIt).port << "]: ";
-		std::cout << (*timesIt).time << ":" << (*previousIt).time << "\n";
 		if((*portListIt) == (*timesIt).port){
-			std::cout << "Port sequence validated: " << (*timesIt).port << "\n";
-			if((*timesIt).time - (*previousIt).time < m_time_interval_seconds){
-				std::cout << "not timed out yet\n";
-			}else{
+			if(!((*timesIt).time - (*previousIt).time < m_time_interval_seconds)){
 				std::cout << "Time out detected!\n";
 				return -2;
 			}
 		}else{
-			std::cout << "Invalid port sequence\n";
 			return -3;
 		}
 		previousIt = timesIt;
