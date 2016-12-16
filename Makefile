@@ -1,9 +1,8 @@
-DEBUG=-ggdb
-FLAGS=-O3 -Wall
+GS=-O3 -Wall
 GPP=g++ -std=c++11
-all: file_parser service
-	$(GPP) $(DEBUG) $(FLAGS) main.cc file_parser.o service.o -lpcap -o knockd
-file_parser:
-	$(GPP) $(DEBUG) $(FLAGS) -c FileParser.cc -o file_parser.o
-service:
-	$(GPP) $(DEBUG) $(FLAGS) -c Service.cc -o service.o
+%.o: %.cc; $(GPP) $(DEBUG) $(FLAGS) -o $@ -c $^
+	all: knockd
+	OBJS = FileParser.o Service.o
+knockd: main.cc $(OBJS)
+		$(GPP) $(DEBUG) $(FLAGS) $^ -lpcap -o $@
+-include $(OBJS:=.d)
