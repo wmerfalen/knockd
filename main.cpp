@@ -18,7 +18,7 @@ void usage(std::string_view bin) {
 pcap_t *handle = nullptr;
 char errbuf[PCAP_ERRBUF_SIZE];
 struct bpf_program fp;		/* The compiled filter expression */
-std::string filter_exp = "port 22";	/* The filter expression */
+std::string filter_exp;	/* The filter expression */
 bpf_u_int32 mask = 0;		/* The netmask of our sniffing device */
 bpf_u_int32 net = 0;		/* The IP of our sniffing device */
 struct pcap_pkthdr header;	/* The header that pcap gives us */
@@ -109,6 +109,7 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 	if(client == nullptr) {
 		client_slots.emplace_front((const in_addr*)&(ip->ip_src));
 		client = &client_slots.front();
+		m_debug("creating client for " << inet_ntoa(ip->ip_src));
 	}
 
 
@@ -158,6 +159,17 @@ int main(int argc, char *argv[]) {
 		}
 		ports.emplace_back(static_cast<uint16_t>(p));
 	}
+	std::string template_filter = protocol == LISTEN_TCP ? "tcp dst port " : "udp dst port ";
+
+	bool first = true;
+	for(const auto& p : ports) {
+		if(!first) {
+			filter_exp += " or ";
+		}
+		first = false;
+		filter_exp += template_filter + std::to_string(p);
+	}
+	m_debug("filter_exp: '" << filter_exp << "'");
 	if(pcap_lookupnet((char*)dev.c_str(), &net, &mask, errbuf) == -1) {
 		std::cerr << "Can't get netmask for device " << dev << "\n";
 		net = 0;
@@ -178,12 +190,6 @@ int main(int argc, char *argv[]) {
 	}
 
 	pcap_loop(handle, 0, got_packet, nullptr);
-	//int pcap_dispatch(pcap_t *p, int cnt, pcap_handler callback, u_char *user);
-	/* Grab a packet */
-	//packet = pcap_next(handle, &header);
-	/* Print its length */
-	//printf("Jacked a packet with length of [%d]\n", header.len);
-	/* And close the session */
 	pcap_close(handle);
 
 	exit(0);
