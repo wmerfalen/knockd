@@ -12,10 +12,14 @@
 
 #define MAX_PORTS 64
 
+#define ALLOW_COMMAND "/root/knockd-allow"
+
 #define m_debug(A) std::cout << "[debug]: " << __FUNCTION__ << ":" << __LINE__ << ":->" << A << "\n";
 
 void usage(std::string_view bin) {
 	std::cerr << "Usage: " << bin << " <device> <tcp|udp> <port>...<port-N>\n";
+	std::cerr << "\n" <<
+	    "Keep in mind: this program will run /root/knockd-allow IP when knocking is successful\n";
 }
 
 pcap_t *handle = nullptr;
@@ -114,6 +118,10 @@ state_management_t* get_by_ip(const in_addr src) {
 void allow_client(state_management_t* client) {
 	std::string host = inet_ntoa(client->src_ip);
 	std::cout << "Allow: " << host << "\n";
+	std::string command = ALLOW_COMMAND;
+	command += " ";
+	command += host;
+	system(command.c_str());
 	remove_client(client);
 }
 
