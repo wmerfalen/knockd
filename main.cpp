@@ -8,6 +8,7 @@
 #include <optional>
 #include <functional>
 #include "TCPTypes.h"
+#include <boost/pool/object_pool.hpp>
 
 #define m_debug(A) std::cout << "[debug]: " << __FUNCTION__ << ":" << __LINE__ << ":->" << A << "\n";
 
@@ -45,9 +46,6 @@ bool lower_case_compare(const std::string& a,const std::string& b) {
 }
 
 struct state_management_t {
-	in_addr src_ip;
-	std::size_t index;
-	std::array<time_t,10> timestamps;
 	state_management_t() : index(0) {
 		std::fill(timestamps.begin(),timestamps.end(),0);
 		memset(&src_ip,0,sizeof(src_ip));
@@ -60,13 +58,57 @@ struct state_management_t {
 		index = copy.index;
 		std::copy(copy.timestamps.cbegin(),copy.timestamps.cend(),timestamps.begin());
 	}
+	void import_host(const in_addr* __src_ip) {
+		index = 0;
+		std::fill(timestamps.begin(),timestamps.end(),0);
+		src_ip = *__src_ip;
+	}
+	enum knock_result : uint8_t {
+		ALLOW_CLIENT = 0,
+		INCREMENT_INDEX,
+		KNOCK_FAILED,
+	};
+	void increment_index() {
+		++index;
+	}
+	knock_result knock(const uint16_t& port) {
+		if(index >= ports.size()) {
+			return ALLOW_CLIENT;
+		}
+		if(port == ports[index]) {
+			return INCREMENT_INDEX;
+		}
+		return KNOCK_FAILED;
+	}
+	const std::string& to_string() {
+		if(ip_string.length()) {
+			return ip_string;
+		}
+		ip_string = inet_ntoa(src_ip);
+		return ip_string;
+	}
+	std::string ip_string;
+	in_addr src_ip;
+	std::size_t index;
+	std::array<time_t,10> timestamps;
 };
-std::forward_list<state_management_t> client_slots;
+
+boost::object_pool<state_management_t> client_slots;
+std::vector<state_management_t*> pointers;
+
+void remove_client(state_management_t* c) {
+	client_slots.free(c);
+	pointers.erase(
+	std::remove_if(pointers.begin(),pointers.end(),[&](const state_management_t* ptr) {
+		return ptr == c;
+	}),
+	pointers.end());
+}
 
 state_management_t* get_by_ip(const in_addr src) {
-	for(auto& client : client_slots) {
-		if(client.src_ip.s_addr == src.s_addr) {
-			return &client;
+	for(auto& client : pointers) {
+		if(client->src_ip.s_addr == src.s_addr) {
+			return client;
 		}
 	}
 	return nullptr;
@@ -74,9 +116,7 @@ state_management_t* get_by_ip(const in_addr src) {
 void allow_client(state_management_t* client) {
 	std::string host = inet_ntoa(client->src_ip);
 	std::cout << "Allow: " << host << "\n";
-	client_slots.remove_if([&](const state_management_t& cl) {
-		return cl.src_ip.s_addr == client->src_ip.s_addr;
-	});
+	remove_client(client);
 }
 
 
@@ -93,12 +133,9 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 	const struct sniff_ip *ip; /* The IP header */
 	const struct sniff_tcp *tcp; /* The TCP header */
 	const struct sniff_udp *udp; /* The UDP header */
-	const u_char *payload; /* Packet payload */
 
 	u_int size_ip;
 	u_int size_tcp;
-	u_int size_udp;
-	//ethernet = (struct sniff_ethernet*)(packet);
 	ip = (struct sniff_ip*)(packet + SIZE_ETHERNET);
 	size_ip = IP_HL(ip)*4;
 	if(size_ip < 20) {
@@ -107,11 +144,13 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 	}
 	state_management_t* client = get_by_ip(ip->ip_src);
 	if(client == nullptr) {
-		client_slots.emplace_front((const in_addr*)&(ip->ip_src));
-		client = &client_slots.front();
+		client = client_slots.malloc();
+		client->import_host(&(ip->ip_src));
+		pointers.emplace_back(client);
 		m_debug("creating client for " << inet_ntoa(ip->ip_src));
 	}
 
+	uint16_t port = 0;
 
 	if(protocol == LISTEN_TCP) {
 		tcp = (struct sniff_tcp*)(packet + SIZE_ETHERNET + size_ip);
@@ -120,13 +159,28 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 			printf("   * Invalid TCP header length: %u bytes\n", size_tcp);
 			return;
 		}
-		//payload = (u_char *)(packet + SIZE_ETHERNET + size_ip + size_tcp);
+		port = ntohs(tcp->th_dport);
 	} else {
 		udp = (struct sniff_udp*)(packet + SIZE_ETHERNET + size_ip);
-		//payload = (u_char *)(packet + SIZE_ETHERNET + size_ip + size_udp);
+		port = ntohs(udp->uh_dport);
 	}
-	if(client->index >= ports.size()) {
-		allow_client(client);
+	m_debug("IN:" << client->to_string() << ":" << port);
+	switch(client->knock(port)) {
+		case state_management_t::knock_result::ALLOW_CLIENT:
+			m_debug("Allowing client: " << client->to_string());
+			allow_client(client);
+			break;
+		case state_management_t::knock_result::INCREMENT_INDEX:
+			m_debug("increment_index for client: " << client->to_string());
+			client->increment_index();
+			break;
+		case state_management_t::knock_result::KNOCK_FAILED:
+			m_debug("remove_client: " << client->to_string());
+			remove_client(client);
+			break;
+		default:
+			std::cerr << "[warning]: unknown value returned from client->knock(" << port << ")\n";
+			break;
 	}
 }
 
