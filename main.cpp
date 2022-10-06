@@ -10,6 +10,8 @@
 #include "TCPTypes.h"
 #include <boost/pool/object_pool.hpp>
 
+#define MAX_PORTS 64
+
 #define m_debug(A) std::cout << "[debug]: " << __FUNCTION__ << ":" << __LINE__ << ":->" << A << "\n";
 
 void usage(std::string_view bin) {
@@ -47,7 +49,6 @@ bool lower_case_compare(const std::string& a,const std::string& b) {
 
 struct state_management_t {
 	state_management_t() : index(0) {
-		std::fill(timestamps.begin(),timestamps.end(),0);
 		memset(&src_ip,0,sizeof(src_ip));
 	}
 	state_management_t(const in_addr* __src_ip) : state_management_t() {
@@ -56,11 +57,9 @@ struct state_management_t {
 	state_management_t(const state_management_t& copy) {
 		src_ip = copy.src_ip;
 		index = copy.index;
-		std::copy(copy.timestamps.cbegin(),copy.timestamps.cend(),timestamps.begin());
 	}
 	void import_host(const in_addr* __src_ip) {
 		index = 0;
-		std::fill(timestamps.begin(),timestamps.end(),0);
 		src_ip = *__src_ip;
 	}
 	enum knock_result : uint8_t {
@@ -76,21 +75,20 @@ struct state_management_t {
 			return ALLOW_CLIENT;
 		}
 		if(port == ports[index]) {
+			if(index + 1 == ports.size()) {
+				return ALLOW_CLIENT;
+			}
 			return INCREMENT_INDEX;
 		}
 		return KNOCK_FAILED;
 	}
 	const std::string& to_string() {
-		if(ip_string.length()) {
-			return ip_string;
-		}
 		ip_string = inet_ntoa(src_ip);
 		return ip_string;
 	}
 	std::string ip_string;
 	in_addr src_ip;
 	std::size_t index;
-	std::array<time_t,10> timestamps;
 };
 
 boost::object_pool<state_management_t> client_slots;
@@ -212,6 +210,10 @@ int main(int argc, char *argv[]) {
 			exit(3);
 		}
 		ports.emplace_back(static_cast<uint16_t>(p));
+		if(ports.size() > MAX_PORTS) {
+			std::cerr << "[error]: maximum allowed ports specified is " << MAX_PORTS << "\n";
+			exit(4);
+		}
 	}
 	std::string template_filter = protocol == LISTEN_TCP ? "tcp dst port " : "udp dst port ";
 
@@ -232,15 +234,15 @@ int main(int argc, char *argv[]) {
 	handle = pcap_open_live((char*)dev.c_str(), BUFSIZ, 1, 1000, errbuf);
 	if(handle == NULL) {
 		std::cerr <<  "[error]: couldn't open device " << dev << ": " << errbuf << "\n";
-		exit(4);
+		exit(5);
 	}
 	if(pcap_compile(handle, &fp, (char*)filter_exp.c_str(), 0, net) == -1) {
 		std::cerr << "Couldn't parse filter " << filter_exp << ": " << pcap_geterr(handle) << "\n";
-		exit(5);
+		exit(7);
 	}
 	if(pcap_setfilter(handle, &fp) == -1) {
 		std::cerr << "Couldn't install filter " << filter_exp << ": " << pcap_geterr(handle) << "\n";
-		exit(6);
+		exit(7);
 	}
 
 	pcap_loop(handle, 0, got_packet, nullptr);
