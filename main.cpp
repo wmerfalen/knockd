@@ -20,11 +20,14 @@
 #define MAX_PORTS 64
 
 #define ALLOW_COMMAND "/root/knockd-allow"
-bool debug = true;
+#ifdef KNOCKD_DEBUG_OUTPUT
+	bool debug = false;
+	#define m_debug(A) if(debug){ std::cout << "[debug]: " << __FUNCTION__ << ":" << __LINE__ << ":->" << A << "\n"; }
+#else
+	#define m_debug(A)
+#endif
 
-#define m_debug(A) if(debug){ std::cout << "[debug]: " << __FUNCTION__ << ":" << __LINE__ << ":->" << A << "\n"; }
-
-#define m_alert(A) std::cout << "***ALERT***\n***ALERT***: " << A << "\n***ALERT***\n";
+#define m_alert(A) std::cerr << "***ALERT***\n***ALERT***: " << A << "\n***ALERT***\n";
 
 void usage(std::string_view bin) {
 	std::cerr <<
