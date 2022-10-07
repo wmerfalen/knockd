@@ -8,17 +8,21 @@
 #include <optional>
 #include <functional>
 #include "TCPTypes.h"
-#include <boost/pool/object_pool.hpp>
 #include <arpa/inet.h>
 #include "xoroshiro.hpp"
 
 #define DEFAULT_TIMEOUT 10
 
+#define CLEANUP_EVERY_N_SECONDS 20
+#define LAST_SEEN_TIMEOUT_IN_SECONDS 40
+#define DUMP_USAGE_STATS_EVERY_N_SECONDS 120
+
 #define MAX_PORTS 64
 
 #define ALLOW_COMMAND "/root/knockd-allow"
+bool debug = true;
 
-#define m_debug(A) std::cout << "[debug]: " << __FUNCTION__ << ":" << __LINE__ << ":->" << A << "\n";
+#define m_debug(A) if(debug){ std::cout << "[debug]: " << __FUNCTION__ << ":" << __LINE__ << ":->" << A << "\n"; }
 
 #define m_alert(A) std::cout << "***ALERT***\n***ALERT***: " << A << "\n***ALERT***\n";
 
@@ -53,6 +57,8 @@ enum listen_protocol : uint8_t {
 };
 
 listen_protocol protocol;
+time_t last_cleanup_time;
+time_t last_stats_usage_time;
 
 bool lower_case_compare(const std::string& a,const std::string& b) {
 	char tmp_a, tmp_b;
@@ -66,118 +72,73 @@ bool lower_case_compare(const std::string& a,const std::string& b) {
 	return true;
 }
 time_t TIMEOUT_SECONDS = DEFAULT_TIMEOUT;
-
-struct state_management_t {
-	state_management_t() : index(0) {
-		m_debug("state_management_t()");
-		memset(&src_ip,0,sizeof(src_ip));
-		last_hit = time(nullptr);
-	}
-	state_management_t(in_addr __src_ip) : state_management_t() {
-		m_debug("state_management_t(in_addr)");
-		src_ip = __src_ip;
-		last_hit = time(nullptr);
-	}
-	state_management_t(const state_management_t& copy) {
-		m_debug("state_management_t copy constructor");
-		src_ip = copy.src_ip;
-		index = copy.index;
-		last_hit = copy.last_hit;
-		ip_string = copy.ip_string;
-	}
-	~state_management_t() {
-		m_debug("~state_management_t");
-		ip_string.clear();
-	}
-	void import_host(in_addr __src_ip) {
-		m_debug("import_host(in_addr)");
-		m_debug("this: " << (uint64_t)this);
-		index = 0;
-		src_ip = __src_ip;
-		last_hit = time(nullptr);
-	}
-	enum knock_result : uint8_t {
-		ALLOW_CLIENT = 0,
-		INCREMENT_INDEX,
-		KNOCK_FAILED,
-		TIMEOUT,
-	};
-	void increment_index() {
-		++index;
-	}
-	knock_result knock(uint16_t port) {
-		time_t now = time(nullptr);
-		if(now - last_hit > TIMEOUT_SECONDS) {
-			return TIMEOUT;
-		}
-		last_hit = time(nullptr);
-		if(index >= ports.size()) {
-			return ALLOW_CLIENT;
-		}
-		if(port == ports[index]) {
-			if(index + 1 == ports.size()) {
-				return ALLOW_CLIENT;
-			}
-			return INCREMENT_INDEX;
-		}
-		return KNOCK_FAILED;
-	}
-	std::string to_string() {
-		m_debug("to_string");
-		char* tmp = inet_ntoa(src_ip);
-		if(!tmp) {
-			m_alert("invalid inet_ntoa return! returning blank string...");
-			ip_string.clear();
-			return ip_string;
-		}
-		ip_string = tmp;
-		return ip_string;
-	}
-	std::string timeout() const {
-		m_debug("timeout");
-		return std::to_string(time(nullptr) - last_hit);
-	}
-	std::string ip_string;
-	in_addr src_ip;
+struct knock {
+	in_addr ip;
 	std::size_t index;
 	time_t last_hit;
 };
 
-static boost::object_pool<state_management_t> client_slots;
-static std::vector<state_management_t*> pointers;
+std::vector<knock> clients;
 
-void remove_client(state_management_t* c) {
-	pointers.erase(
-	std::remove_if(pointers.begin(),pointers.end(),[&](const state_management_t* ptr) {
-		return ptr == c;
+void remove_client(knock client) {
+	clients.erase(
+	std::remove_if(clients.begin(),clients.end(),[&](const auto & param_client) {
+		return param_client.ip.s_addr == client.ip.s_addr;
 	}),
-	pointers.end());
-	m_debug("client_slots.free");
-	client_slots.destroy(c);
+	clients.end());
 }
 
-state_management_t* get_by_ip(const in_addr src) {
+knock& get_by_ip(const in_addr& src) {
 	m_debug("get_by_ip");
-	for(auto& client : pointers) {
+	for(auto& client : clients) {
 		m_debug("checking");
-		if(client->src_ip.s_addr == src.s_addr) {
+		if(client.ip.s_addr == src.s_addr) {
+			client.last_hit = time(nullptr);
 			return client;
 		}
 	}
-	return nullptr;
+	clients.emplace_back();
+	auto& ref = clients.back();
+	ref.ip = src;
+	ref.index = 0;
+	ref.last_hit = time(nullptr);
+	return ref;
 }
-void allow_client(state_management_t* client) {
-	if(!client) {
-		m_alert("allowing client that has nullptr!");
+void allow_client(knock& client) {
+	char* tmp = inet_ntoa(client.ip);
+	if(!tmp) {
+		remove_client(client);
 		return;
 	}
-	std::string host = inet_ntoa(client->src_ip);
+	std::string host = tmp;
 	std::cout << "Allow: " << host << "\n";
 	std::string command = ALLOW_COMMAND;
 	command += " ";
 	command += host;
 	system(command.c_str());
 	remove_client(client);
+}
+
+void cleanup_old_clients() {
+	m_debug("running");
+	clients.erase(
+	std::remove_if(clients.begin(),clients.end(),[&](const auto& param_client) {
+		bool is_old = time(nullptr) - param_client.last_hit > LAST_SEEN_TIMEOUT_IN_SECONDS;
+		if(is_old) {
+			m_debug("removing old client");
+		}
+		return is_old;
+	}),
+	clients.end()
+	);
+	last_cleanup_time = time(nullptr);
+}
+
+void dump_usage_stats() {
+	std::cout << "------ [ USAGE STATS ] -------\n" <<
+	    "[ clients.size(): " << clients.size() << " (bytes: " << clients.size() * sizeof(knock) << ")]\n" <<
+	    "[--------------------------------------]\n";
+	last_stats_usage_time = time(nullptr);
 }
 
 void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
@@ -203,17 +164,7 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 		return;
 	}
 	m_debug("getting client ptr");
-	state_management_t* client = get_by_ip(ip->ip_src);
-	if(client == nullptr) {
-		m_debug("creating client for " << inet_ntoa(ip->ip_src));
-		client = client_slots.construct(ip->ip_src);
-		if(!client) {
-			m_alert("Invalid malloc!");
-			return;
-		}
-		client->import_host(ip->ip_src);
-		pointers.push_back(client);
-	}
+	knock& client = get_by_ip(ip->ip_src);
 
 	uint16_t port = 0;
 
@@ -233,27 +184,34 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 		port = ntohs(udp->uh_dport);
 		m_debug("port :" << port);
 	}
-	m_debug("IN:" << client->to_string() << ":" << port);
-	switch(client->knock(port)) {
-		case state_management_t::knock_result::ALLOW_CLIENT:
-			m_debug("Allowing client: " << client->to_string());
-			allow_client(client);
-			break;
-		case state_management_t::knock_result::INCREMENT_INDEX:
-			m_debug("increment_index for client: " << client->to_string());
-			client->increment_index();
-			break;
-		case state_management_t::knock_result::KNOCK_FAILED:
-			m_debug("remove_client: " << client->to_string());
-			remove_client(client);
-			break;
-		case state_management_t::knock_result::TIMEOUT:
-			m_debug("timeout " << client->timeout() << " remove_client: " << client->to_string());
-			remove_client(client);
-			break;
-		default:
-			std::cerr << "[warning]: unknown value returned from client->knock(" << port << ")\n";
-			break;
+	char* tmp_host = inet_ntoa(ip->ip_src);
+	std::string host;
+	if(!tmp_host) {
+		host = "<unknown>";
+	} else {
+		host = tmp_host;
+	}
+	m_debug("IN:" << host << ":" << port);
+	if(client.index < ports.size()) {
+		if(port == ports[client.index]) {
+			m_debug("incrementing client.index for: " << host);
+			client.index++;
+		} else {
+			m_debug("Resetting for: " << host);
+			client.index = 0;
+		}
+	}
+	if(client.index >= ports.size()) {
+		m_debug("allowing client " << host);
+		allow_client(client);
+		remove_client(client);
+	}
+	if(time(nullptr) - last_cleanup_time > CLEANUP_EVERY_N_SECONDS) {
+		cleanup_old_clients();
+	}
+
+	if(time(nullptr) - last_stats_usage_time > DUMP_USAGE_STATS_EVERY_N_SECONDS) {
+		dump_usage_stats();
 	}
 }
 
@@ -346,6 +304,8 @@ int main(int argc, char *argv[]) {
 		std::cerr << "Couldn't install filter " << filter_exp << ": " << pcap_geterr(handle) << "\n";
 		exit(7);
 	}
+	last_cleanup_time = time(nullptr);
+	last_stats_usage_time = time(nullptr);
 
 	pcap_loop(handle, 0, got_packet, nullptr);
 	pcap_close(handle);
