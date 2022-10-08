@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <forward_list>
 #include <string>
@@ -20,14 +21,23 @@
 #define MAX_PORTS 64
 
 #define ALLOW_COMMAND "/root/knockd-allow"
+#define KNOCKD_DEBUG_OUTPUT
 #ifdef KNOCKD_DEBUG_OUTPUT
-	bool debug = false;
+	bool debug = true;
 	#define m_debug(A) if(debug){ std::cout << "[debug]: " << __FUNCTION__ << ":" << __LINE__ << ":->" << A << "\n"; }
 #else
 	#define m_debug(A)
 #endif
 
 #define m_alert(A) std::cerr << "***ALERT***\n***ALERT***: " << A << "\n***ALERT***\n";
+
+std::string ip2str(const in_addr& ia) {
+	char* tmp = inet_ntoa(ia);
+	if(!tmp) {
+		return "";
+	}
+	return tmp;
+}
 
 void usage(std::string_view bin) {
 	std::cerr <<
@@ -36,9 +46,9 @@ void usage(std::string_view bin) {
 	    << "  Example: " << bin << " eth0 tcp < ports\n"
 	    << "  Example: " << bin << " wlan0 udp < ports\n"
 	    << "\n"
-	    << "Usage: " << bin << " <DEVICE> <PROTO> generate\n"
+	    << "Usage: " << bin << " <DEVICE> <PROTO> generate <FILENAME>\n"
 	    << "  -> listen on DEVICE for PROTO (udp or tcp) traffic. Will generate a random\n"
-	    << " sequence of ports. The sequence will be printed once to stdout.\n"
+	    << " sequence of ports. The sequence will be written to FILENAME\n"
 	    << "\n"
 	    << "Keep in mind: this program will run /root/knockd-allow IP when knocking is successful\n"
 	    ;
@@ -74,7 +84,6 @@ bool lower_case_compare(const std::string& a,const std::string& b) {
 	}
 	return true;
 }
-time_t TIMEOUT_SECONDS = DEFAULT_TIMEOUT;
 struct knock {
 	in_addr ip;
 	std::size_t index;
@@ -108,18 +117,14 @@ knock& get_by_ip(const in_addr& src) {
 	return ref;
 }
 void allow_client(knock& client) {
-	char* tmp = inet_ntoa(client.ip);
-	if(!tmp) {
-		remove_client(client);
-		return;
+	std::string host = ip2str(client.ip);
+	if(host.length()) {
+		std::cout << "Allow: " << host << "\n";
+		std::string command = ALLOW_COMMAND;
+		command += " ";
+		command += host;
+		system(command.c_str());
 	}
-	std::string host = tmp;
-	std::cout << "Allow: " << host << "\n";
-	std::string command = ALLOW_COMMAND;
-	command += " ";
-	command += host;
-	system(command.c_str());
-	remove_client(client);
 }
 
 void cleanup_old_clients() {
@@ -187,13 +192,7 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 		port = ntohs(udp->uh_dport);
 		m_debug("port :" << port);
 	}
-	char* tmp_host = inet_ntoa(ip->ip_src);
-	std::string host;
-	if(!tmp_host) {
-		host = "<unknown>";
-	} else {
-		host = tmp_host;
-	}
+	std::string host = ip2str(ip->ip_src);
 	m_debug("IN:" << host << ":" << port);
 	if(client.index < ports.size()) {
 		if(port == ports[client.index]) {
@@ -221,7 +220,7 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 /**
 	* ./knockd <device> <tcp|udp> < ports.csv
 	*
-	* ./knockd <device> <tcp|udp> generate
+	* ./knockd <device> <tcp|udp> generate <filename>
 	*
 	*/
 int main(int argc, char *argv[]) {
@@ -243,10 +242,20 @@ int main(int argc, char *argv[]) {
 	std::size_t ctr = MAX_PORTS;
 
 	uint16_t min = 1, max = 1;
-	if(argc > 3 && lower_case_compare(argv[3],"generate")) {
+	if(argc > 3 && lower_case_compare(argv[3],"generate") && argc < 5) {
+		std::cerr << "[error]: the generate command requires a filename to write the ports to\n";
+		exit(3);
+	}
+	if(argc > 4 && lower_case_compare(argv[3],"generate")) {
+		std::string ports_file = argv[4];
+		std::ofstream fp(ports_file.c_str(),std::ios::out | std::ios::trunc);
+		if(!fp.good()) {
+			std::cerr << "[error]: failed to open '" << ports_file << "' for writing.\n";
+			exit(4);
+		}
 		xoroshiro::init();
+		xoroshiro::next();
 		m_debug("Generating " << MAX_PORTS << " random ports...");
-		std::cout << "seq:";
 		for(std::size_t i = 0; i < 64; i++) {
 			ports.emplace_back(xoroshiro::next());
 			if(ports.back() < min) {
@@ -255,9 +264,10 @@ int main(int argc, char *argv[]) {
 			if(ports.back() > max) {
 				max = ports.back();
 			}
-			std::cout << ports.back() << "/";
+			fp << std::to_string(ports.back()) << "\n";
 		}
-		std::cout << "\n";
+		fp.close();
+		std::cout << "[status]: wrote ports to '" << ports_file << "'\n";
 	} else {
 		m_debug("Reading ports from stdin...");
 		uint16_t n = 0;
