@@ -2,9 +2,7 @@
 #include <vector>
 #include <string>
 #include <functional>
-#include <pcap.h>
-#include "TCPTypes.h"
-#include "xoroshiro.hpp"
+#include "lib/knockd.hpp"
 
 /* ethernet headers are always exactly 14 bytes */
 #define DEFAULT_TIMEOUT 10
