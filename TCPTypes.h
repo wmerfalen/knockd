@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 
+#define SIZE_ETHERNET 14
 #ifndef ETHER_ADDR_LEN
 	#define ETHER_ADDR_LEN	6
 #endif
