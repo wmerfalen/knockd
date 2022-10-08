@@ -98,18 +98,18 @@ namespace libknockd {
 		std::size_t index;
 		time_t last_hit;
 	};
+	enum capture_result_t : int {
+		KNOCKDCAP_ERROR_DEVICE = -1,
+		KNOCKDCAP_ERROR_COMPILE = -2,
+		KNOCKDCAP_ERROR_SET_FILTER = -3,
+		KNOCKDCAP_SUCCESS = 0,
+	};
+	enum protocol_t : uint8_t {
+		NONE,
+		PROTO_TCP,
+		PROTO_UDP,
+	};
 	struct Listener {
-			enum capture_result_t : int {
-				KNOCKDCAP_ERROR_DEVICE = -1,
-				KNOCKDCAP_ERROR_COMPILE = -2,
-				KNOCKDCAP_ERROR_SET_FILTER = -3,
-				KNOCKDCAP_SUCCESS = 0,
-			};
-			enum protocol_t : uint8_t {
-				NONE,
-				PROTO_TCP,
-				PROTO_UDP,
-			};
 			Listener() : handle(nullptr),
 				mask(0), net(0),
 				protocol(NONE),
