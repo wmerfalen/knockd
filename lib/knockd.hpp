@@ -11,8 +11,6 @@
 #include "xoroshiro.hpp"
 #include <cstring>
 
-#include <unistd.h> // TODO: FIXME remove me
-
 #define ALLOW_COMMAND "/root/knockd-allow"
 #define m_debug(A) std::cerr << "[debug " << __FILE__ << "@" << __FUNCTION__ << ":" << __LINE__ << "]->" << A << "\n";
 
@@ -516,13 +514,13 @@ namespace libknockd {
 				client.last_hit = header->ts.tv_sec;
 
 				uint16_t port = 0;
-				u_char ip_protocol = IP_PROTO(ip);
-				std::cerr << "[info]: caught packet of protocol #:" << std::to_string(ip_protocol) << "\n";
+				//u_char ip_protocol = IP_PROTO(ip);
+				//std::cerr << "[info]: caught packet of protocol #:" << std::to_string(ip_protocol) << "\n";
 
 				protocol_t our_protocol = NONE;
 				if(IP_PROTO(ip) == protocol_t::TCP) {
 					our_protocol = TCP;
-					m_debug("TCP packet caught");
+					//m_debug("TCP packet caught");
 					tcp = (struct sniff_tcp*)(packet + SIZE_ETHERNET + size_ip);
 					size_tcp = TH_OFF(tcp)*4;
 					if(size_tcp < 20) {
@@ -530,7 +528,7 @@ namespace libknockd {
 					}
 					port = ntohs(tcp->th_dport);
 				} else if(IP_PROTO(ip) == protocol_t::UDP) {
-					m_debug("UDP packet caught");
+					//m_debug("UDP packet caught");
 					our_protocol = UDP;
 					udp = (struct sniff_udp*)(packet + SIZE_ETHERNET + size_ip);
 					port = ntohs(udp->uh_dport);
@@ -544,8 +542,8 @@ namespace libknockd {
 						m_debug("client index incrementing: " << host);
 						client.index++;
 					} else {
-						m_debug("client failed index: " << host);
-						client.index = 0;
+						//m_debug("client failed index: " << host);
+						//client.index = 0;
 					}
 				}
 				if(client.index >= ports.size()) {
@@ -600,7 +598,6 @@ namespace libknockd {
 				mask = pair.second;
 				filter_exp = util::generate_multi_protocol_bpf_program<std::vector<port_t>,std::string>(&ports);
 				m_debug("filter_exp: '" << filter_exp << "'");
-				sleep(1);
 				if(pcap_compile(handle, &bpf_filter_program, (char*)filter_exp.c_str(), 0, net) == -1) {
 					return capture_result_t::KNOCKDCAP_ERROR_COMPILE;
 				}
