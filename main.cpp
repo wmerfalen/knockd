@@ -9,8 +9,6 @@
 
 #define MAX_PORTS 64
 
-#define ALLOW_COMMAND "/root/knockd-allow"
-
 #ifdef KNOCKD_DEBUG_OUTPUT
 	bool debug = true;
 	#define m_debug(A) if(debug){ std::cout << "[debug]: " << __FUNCTION__ << ":" << __LINE__ << ":->" << A << "\n"; }
@@ -107,9 +105,9 @@ int main(int argc, char *argv[]) {
 			capture_protocol = false;
 			std::string proto = to_string_limit(argv[i],3);
 			if(lower_case_compare(proto,"tcp")) {
-				listen_protocol = libknockd::protocol_t::PROTO_TCP;
+				listen_protocol = libknockd::protocol_t::TCP;
 			} else if(lower_case_compare(proto,"udp")) {
-				listen_protocol = libknockd::protocol_t::PROTO_UDP;
+				listen_protocol = libknockd::protocol_t::UDP;
 			} else {
 				std::cerr << "[error]: specify tcp or udp for protocol\n";
 				exit(2);
@@ -222,11 +220,23 @@ int main(int argc, char *argv[]) {
 	}
 
 	libknockd::Listener listener(dev,listen_protocol,ports,0,"/root/knockd-allow");
-	if(listener.start_capture() < 0) {
+	int ret = listener.prepare_device(dev);
+	if(ret < 0) {
+		std::cerr << "[error]: failed to prepare device: '" << listener.get_error() << "'\n";
+		listener.close();
+		exit(1);
+	}
+	/**
+	 * passing in zero as max packet count means we will won't be returning from
+	 * this next call.
+	 */
+	ret = listener.start_capture(0);
+	if(listener.run() < 0) {
 		std::cerr << "[error]: failed to start capture\n";
 	} else {
 		std::cout << "[status]: completed capture successfully\n";
 	}
+	listener.close();
 
 	return 0;
 }

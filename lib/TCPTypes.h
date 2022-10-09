@@ -37,6 +37,7 @@ struct sniff_ip {
 };
 #define IP_HL(ip)		(((ip)->ip_vhl) & 0x0f)
 #define IP_V(ip)		(((ip)->ip_vhl) >> 4)
+#define IP_PROTO(ip) ((ip)->ip_p)
 
 /* TCP header */
 typedef u_int tcp_seq;
